@@ -1,0 +1,151 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" /><meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>DJ View</title>
+  <style>
+    :root{--bg:#1f2937;--panel:#111827;--line:#374151;--text:#f9fafb;--muted:#9ca3af;--primary:#22d3ee;--played:#10b981;--danger:#ef4444;--soft:#4b5563}
+    *{box-sizing:border-box} body{margin:0;font-family:Arial,sans-serif;background:var(--bg);color:var(--text)}
+    .wrap{max-width:1300px;margin:0 auto;padding:24px}.topbar{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:20px}
+    .title-block h1{margin:0 0 8px;font-size:2rem}.subtitle{color:var(--muted);margin:0}
+    .top-actions{display:flex;gap:10px;flex-wrap:wrap;align-items:center}.pill{background:var(--soft);color:#e5e7eb;padding:8px 12px;border-radius:999px;font-size:13px;font-weight:bold}
+    .card{background:var(--panel);border:1px solid var(--line);border-radius:16px;padding:20px}.queue{display:grid;grid-template-columns:repeat(auto-fill,minmax(340px,1fr));gap:18px}
+    .request-card{background:#0f172a;border:1px solid var(--line);border-radius:14px;overflow:hidden;display:flex;flex-direction:column}.request-card.played{opacity:.68;border-color:#14532d}
+    .thumb{width:100%;height:190px;object-fit:cover;display:block;background:#000}.body{padding:16px}.position{display:inline-block;background:var(--soft);color:white;border-radius:999px;padding:4px 10px;font-size:12px;margin-bottom:10px;font-weight:bold}
+    .label{font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);margin-bottom:5px}.title{font-size:1.02rem;font-weight:bold;margin-bottom:10px;line-height:1.4}.artist{color:#d1d5db;margin-bottom:12px;line-height:1.4}
+    .meta{color:var(--muted);font-size:12px;line-height:1.5;margin-bottom:14px}.search-preview{display:inline-block;margin-top:6px;background:rgba(34,211,238,.12);color:#a5f3fc;padding:6px 10px;border-radius:999px;font-size:12px;font-weight:bold}
+    .actions{display:flex;gap:8px;flex-wrap:wrap}.btn,a.btn{display:inline-flex;align-items:center;justify-content:center;padding:9px 11px;border-radius:10px;border:none;text-decoration:none;font-size:12px;font-weight:bold;cursor:pointer}
+    .btn-video{background:var(--soft);color:white}.btn-search{background:var(--primary);color:#111827}.btn-played{background:var(--played);color:white}.btn-remove{background:var(--danger);color:white}.btn-disabled{background:#374151;color:#9ca3af;cursor:not-allowed;pointer-events:none}
+    .empty{text-align:center;color:var(--muted);padding:32px;border:1px dashed var(--line);border-radius:16px}.nav-link{color:#93c5fd;text-decoration:none;font-weight:bold}
+    @media (max-width:640px){.queue{grid-template-columns:1fr}.thumb{height:170px}}
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="topbar">
+      <div class="title-block">
+        <h1>DJ View</h1>
+        <p class="subtitle">Live request queue for <strong><%= user.display_name %></strong>. Auto-refresh is on every 5 seconds.</p>
+      </div>
+      <div class="top-actions">
+        <div class="pill" id="queueCount">0 requests</div>
+        <div class="pill">Auto refresh: 5s</div>
+        <a href="/dashboard" class="nav-link">Back to dashboard</a>
+      </div>
+    </div>
+
+    <div class="card">
+      <div id="queue" class="queue"></div>
+    </div>
+  </div>
+
+  <script>
+    const searchUrl1 = <%- JSON.stringify(settings?.search_url_1 || '') %>;
+    const searchUrl2 = <%- JSON.stringify(settings?.search_url_2 || '') %>;
+    const queueEl = document.getElementById('queue');
+    const countEl = document.getElementById('queueCount');
+
+    function escapeHtml(value) {
+      return String(value || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#039;');
+    }
+    function formatDate(isoString) {
+      const date = new Date(isoString);
+      if (Number.isNaN(date.getTime())) return '';
+      return date.toLocaleString();
+    }
+    function extractSearchTitle(rawTitle, fallbackTitle = '') {
+      const raw = String(rawTitle || '').trim();
+      if (!raw) return String(fallbackTitle || '').trim();
+      let searchText = raw.includes('|') ? raw.split('|')[0].trim() : raw;
+      searchText = searchText.replace(/[\(\[].*?[\)\]]/g, '').trim();
+      if (searchText.includes(' - ')) {
+        const parts = searchText.split(' - ').map(p => p.trim()).filter(Boolean);
+        searchText = parts[parts.length - 1] || searchText;
+      }
+      searchText = searchText.replace(/\s+/g, ' ').trim();
+      if (!searchText) {
+        searchText = String(fallbackTitle || raw).trim();
+        searchText = searchText.replace(/[\(\[].*?[\)\]]/g, '').trim();
+      }
+      return searchText;
+    }
+    function buildSearchUrl(baseUrl, text) {
+      const cleanBaseUrl = String(baseUrl || '').trim();
+      if (!cleanBaseUrl) return '';
+      return cleanBaseUrl + String(text || '').trim().replace(/\s+/g, '+');
+    }
+    function getDomain(url) {
+      try { return new URL(url).hostname.replace(/^www\./, ''); } catch { return ''; }
+    }
+    async function fetchQueue() {
+      const res = await fetch('/api/requests', { credentials: 'same-origin' });
+      if (!res.ok) throw new Error('Could not load queue');
+      return res.json();
+    }
+    async function togglePlayed(id, played) {
+      const res = await fetch(`/api/requests/${id}`, {
+        method:'PATCH',
+        headers:{'Content-Type':'application/json'},
+        credentials:'same-origin',
+        body:JSON.stringify({ played })
+      });
+      if (!res.ok) { alert('Could not update request.'); return; }
+      renderQueue();
+    }
+    async function removeRequest(id) {
+      const confirmed = window.confirm('Remove this request?');
+      if (!confirmed) return;
+      const res = await fetch(`/api/requests/${id}`, { method:'DELETE', credentials:'same-origin' });
+      if (!res.ok) { alert('Could not remove request.'); return; }
+      renderQueue();
+    }
+    function renderButtons(request) {
+      const rawTitle = request.raw_title || '';
+      const fallbackTitle = request.song_name || rawTitle || '';
+      const searchText = extractSearchTitle(rawTitle, fallbackTitle);
+      const s1 = buildSearchUrl(searchUrl1, searchText);
+      const s2 = buildSearchUrl(searchUrl2, searchText);
+      const d1 = getDomain(searchUrl1);
+      const d2 = getDomain(searchUrl2);
+      const videoUrl = request.video_id ? `https://www.youtube.com/watch?v=${encodeURIComponent(request.video_id)}` : '';
+      let html = '';
+      html += videoUrl ? `<a class="btn btn-video" href="${videoUrl}" target="_blank" rel="noopener noreferrer">View Video</a>` : `<span class="btn btn-disabled">No Video</span>`;
+      html += s1 ? `<a class="btn btn-search" href="${s1}" target="_blank" rel="noopener noreferrer">${escapeHtml(d1 || 'Search 1')}</a>` : `<span class="btn btn-disabled">Search 1</span>`;
+      html += s2 ? `<a class="btn btn-search" href="${s2}" target="_blank" rel="noopener noreferrer">${escapeHtml(d2 || 'Search 2')}</a>` : `<span class="btn btn-disabled">Search 2</span>`;
+      html += `<button class="btn btn-played" onclick="togglePlayed(${request.id}, ${request.played ? 'false' : 'true'})">${request.played ? 'Unmark Played' : 'Mark as Played'}</button>`;
+      html += `<button class="btn btn-remove" onclick="removeRequest(${request.id})">Remove</button>`;
+      return { html, searchText };
+    }
+    function thumbnailUrl(videoId) {
+      if (!videoId) return '';
+      return `https://i.ytimg.com/vi/${encodeURIComponent(videoId)}/hqdefault.jpg`;
+    }
+    async function renderQueue() {
+      try {
+        const requests = await fetchQueue();
+        countEl.textContent = `${requests.length} request${requests.length === 1 ? '' : 's'}`;
+        if (!requests.length) {
+          queueEl.innerHTML = `<div class="empty">No requests in the queue yet.</div>`;
+          return;
+        }
+        queueEl.innerHTML = requests.map((request, index) => {
+          const buttons = renderButtons(request);
+          const title = escapeHtml(request.song_name || request.raw_title || 'Unknown song');
+          const artist = escapeHtml(request.artist_name || request.channel_title || 'Unknown artist');
+          const channel = escapeHtml(request.channel_title || 'Unknown channel');
+          const when = escapeHtml(formatDate(request.added_at));
+          const img = thumbnailUrl(request.video_id);
+          return `<div class="request-card ${request.played ? 'played' : ''}">${img ? `<img class="thumb" src="${img}" alt="${title}">` : ''}<div class="body"><div class="position">#${index + 1}${request.played ? ' • Played' : ''}</div><div class="label">Title</div><div class="title">${title}</div><div class="label">Artist</div><div class="artist">${artist}</div><div class="meta">Source: ${channel}<br>Requested: ${when}<br><span class="search-preview">Search preview: ${escapeHtml(buttons.searchText)}</span></div><div class="actions">${buttons.html}</div></div></div>`;
+        }).join('');
+      } catch {
+        queueEl.innerHTML = `<div class="empty">Could not load queue.</div>`;
+      }
+    }
+
+    window.togglePlayed = togglePlayed;
+    window.removeRequest = removeRequest;
+    renderQueue();
+    setInterval(renderQueue, 5000);
+  </script>
+</body>
+</html>

@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" /><meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title><%= user.display_name %> Requests</title>
+  <style>
+    :root{--bg:#1f2937;--panel:#111827;--line:#374151;--text:#f9fafb;--muted:#9ca3af;--primary:#7c3aed;--success:#10b981;--shadow:0 20px 60px rgba(0,0,0,.38)}
+    *{box-sizing:border-box} body{margin:0;font-family:Arial,sans-serif;background:var(--bg);color:var(--text);min-height:100vh}
+    .wrap{max-width:760px;margin:0 auto;padding:18px}.hero,.panel{background:var(--panel);border:1px solid var(--line);border-radius:24px;box-shadow:var(--shadow);margin-bottom:18px}
+    .hero{padding:22px}.panel-header{padding:20px 20px 14px;border-bottom:1px solid var(--line)}.panel-body{padding:18px 20px 20px}
+    h1{margin:0 0 8px;font-size:clamp(1.8rem,5vw,2.4rem)} .sub,.panel-header p{margin:0;color:var(--muted);line-height:1.5}
+    .search-row{display:grid;grid-template-columns:1fr auto;gap:10px;margin-bottom:12px}
+    input{width:100%;padding:15px 16px;border-radius:14px;border:1px solid rgba(255,255,255,.09);background:rgba(255,255,255,.05);color:var(--text);font-size:1rem;outline:none}
+    button{border:none;border-radius:14px;padding:14px 16px;font-size:.96rem;font-weight:700;cursor:pointer}.btn-primary{color:white;background:linear-gradient(135deg,var(--primary),#ec4899)}
+    .subnote,.message{min-height:24px;font-size:.94rem;line-height:1.45;margin-bottom:14px}.subnote{color:var(--muted)} .message{color:#ddd6fe}
+    .results,.recent-list{display:grid;gap:12px}
+    .song-card{display:grid;grid-template-columns:110px 1fr;gap:12px;padding:12px;border-radius:18px;background:rgba(255,255,255,.03);border:1px solid rgba(255,255,255,.07);align-items:start}
+    .song-card img{width:100%;height:82px;object-fit:cover;border-radius:12px;display:block;background:#000}.song-title{margin:0 0 6px;font-size:.98rem;font-weight:700;line-height:1.35}
+    .song-meta{color:var(--muted);font-size:.88rem;line-height:1.45;margin-bottom:10px}.song-preview{display:inline-block;margin-top:6px;padding:5px 9px;border-radius:999px;background:rgba(34,211,238,.12);color:#a5f3fc;font-size:.78rem;font-weight:700}
+    .btn-add{background:var(--success);color:white;padding:10px 12px;border-radius:10px;font-size:.88rem}
+    .empty{padding:18px;border-radius:16px;border:1px dashed rgba(255,255,255,.12);background:rgba(255,255,255,.025);color:var(--muted);text-align:center;line-height:1.5}
+    .loading-frame{min-height:180px;display:flex;align-items:flex-start;justify-content:center;padding-top:26px;border-radius:18px;border:1px dashed rgba(255,255,255,.12);background:linear-gradient(180deg,rgba(124,58,237,.10),rgba(34,211,238,.05)),rgba(255,255,255,.025);text-align:center}
+    .loading-title{font-size:clamp(1.4rem,4vw,1.9rem);font-weight:800;margin-bottom:10px;color:#f5d0fe}.recent-item{padding:12px 14px;border-radius:16px;background:rgba(255,255,255,.03);border:1px solid rgba(255,255,255,.07)}
+    .recent-title{font-weight:700;margin-bottom:4px;line-height:1.35}.recent-meta{color:var(--muted);font-size:.86rem;line-height:1.45}
+    @media (max-width:560px){.search-row{grid-template-columns:1fr}.song-card{grid-template-columns:1fr}.song-card img{height:160px}}
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <section class="hero">
+      <h1><%= user.display_name %> Requests</h1>
+      <p class="sub">Search for a song and send your request. Please check the recent list first to avoid duplicates.</p>
+    </section>
+
+    <section class="panel">
+      <div class="panel-header"><h2>Search Songs</h2><p>Search by title, artist, remix, soundtrack, or version.</p></div>
+      <div class="panel-body">
+        <div class="search-row">
+          <input id="searchInput" type="text" placeholder="Search YouTube for a song" />
+          <button class="btn-primary" id="searchBtn">Search</button>
+        </div>
+        <div class="subnote" id="apiStatus"></div>
+        <div class="message" id="message"></div>
+        <div class="results" id="results"></div>
+      </div>
+    </section>
+
+    <section class="panel">
+      <div class="panel-header"><h2>Recent Requests</h2><p>Latest requests already added for this DJ.</p></div>
+      <div class="panel-body">
+        <div class="recent-list" id="recentList">
+          <% if (requests && requests.length) { %>
+            <% requests.forEach(function(request) { %>
+              <div class="recent-item">
+                <div class="recent-title"><%= request.song_name || request.raw_title || 'Unknown song' %></div>
+                <div class="recent-meta"><%= request.artist_name || request.channel_title || 'Unknown artist' %><br>Requested: <%= request.added_at %></div>
+              </div>
+            <% }) %>
+          <% } else { %>
+            <div class="empty">No recent requests yet.</div>
+          <% } %>
+        </div>
+      </div>
+    </section>
+  </div>
+
+  <script>
+    const apiKey = <%- JSON.stringify(settings?.youtube_api_key || '') %>;
+    const guestSlug = <%- JSON.stringify(user.dj_slug || '') %>;
+    const elements = {searchInput:document.getElementById('searchInput'),searchBtn:document.getElementById('searchBtn'),apiStatus:document.getElementById('apiStatus'),message:document.getElementById('message'),results:document.getElementById('results'),recentList:document.getElementById('recentList')};
+    let latestResults = [];
+    function escapeHtml(v){return String(v||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#039;')}
+    function formatDate(s){const d=new Date(s); if(Number.isNaN(d.getTime())) return ''; return d.toLocaleString()}
+    function setMessage(t,e=false){elements.message.textContent=t; elements.message.style.color=e?'#fecdd3':'#ddd6fe'}
+    function showLoadingFrame(){elements.results.innerHTML=`<div class="loading-frame"><div><div class="loading-title">Loading</div><div>Tap add request when you have found your song.</div></div></div>`}
+    function extractSongInfo(rawTitle,fallbackChannel=''){const original=String(rawTitle||'').trim(); let cleaned=original.replace(/\[[^\]]*\]/g,' ').replace(/\([^)]*(official|video|audio|lyrics|lyric video|hd|hq|4k|visualizer|visualiser|music video|mv|remastered|topic)[^)]*\)/gi,' ').replace(/\b(official video|official audio|lyric video|lyrics|audio|video|visualizer|visualiser|music video|mv|hd|hq|4k|remastered)\b/gi,' ').replace(/\s+/g,' ').trim(); let artist=''; let song=cleaned; if(cleaned.includes(' - ')){const parts=cleaned.split(' - ').map(p=>p.trim()).filter(Boolean); if(parts.length>=2){artist=parts[0]; song=parts.slice(1).join(' - ')}} else if(cleaned.includes(' | ')){const parts=cleaned.split(' | ').map(p=>p.trim()).filter(Boolean); if(parts.length>=2){artist=parts[0]; song=parts[1]}} if(!artist){artist=String(fallbackChannel||'').replace(/\s*-\s*topic$/i,'').trim()} return {songName:song||cleaned||original||'Unknown song', artistName:artist||'Unknown artist'}}
+    function extractSearchTitle(rawTitle,fallbackTitle=''){const raw=String(rawTitle||'').trim(); if(!raw) return String(fallbackTitle||'').trim(); let t=raw.includes('|')?raw.split('|')[0].trim():raw; t=t.replace(/[\(\[].*?[\)\]]/g,'').trim(); if(t.includes(' - ')){const parts=t.split(' - ').map(p=>p.trim()).filter(Boolean); t=parts[parts.length-1]||t} t=t.replace(/\s+/g,' ').trim(); if(!t){t=String(fallbackTitle||raw).trim().replace(/[\(\[].*?[\)\]]/g,'').trim()} return t}
+    function updateApiStatus(){ if(apiKey){elements.apiStatus.textContent='Search is ready.'; elements.apiStatus.style.color='#a7f3d0'} else {elements.apiStatus.textContent='Search is not available right now.'; elements.apiStatus.style.color='#fbcfe8'}}
+    function renderResults(items=[]){if(!items.length){elements.results.innerHTML='<div class="empty">Search results will appear here.</div>'; return} elements.results.innerHTML=items.map(item=>{const title=escapeHtml(item.snippet.title); const channel=escapeHtml(item.snippet.channelTitle||'Unknown channel'); const parsed=extractSongInfo(item.snippet.title,item.snippet.channelTitle); const previewSearch=extractSearchTitle(item.snippet.title,parsed.songName); const thumbnail=item.snippet.thumbnails?.medium?.url || item.snippet.thumbnails?.default?.url || ''; const videoId=item.id.videoId; return `<div class="song-card"><img src="${thumbnail}" alt="Thumbnail for ${title}"><div><div class="song-title">${escapeHtml(parsed.songName)}</div><div class="song-meta">${escapeHtml(parsed.artistName)}<br>Source: ${channel}<br><span class="song-preview">Search preview: ${escapeHtml(previewSearch)}</span></div><button class="btn-add" onclick="addToQueue('${videoId}')">Add Request</button></div></div>`}).join(''); latestResults=items}
+    async function searchYouTube(){const query=elements.searchInput.value.trim(); if(!apiKey){setMessage('Search is not available right now.',true); return} if(!query){setMessage('Type a song name or artist to search.',true); return} setMessage('Searching YouTube...'); elements.searchBtn.disabled=true; showLoadingFrame(); try{const params=new URLSearchParams({part:'snippet', type:'video', videoCategoryId:'10', maxResults:'10', q:query, key:apiKey}); const response=await fetch(`https://www.googleapis.com/youtube/v3/search?${params.toString()}`); const data=await response.json(); if(!response.ok) throw new Error(data?.error?.message || 'Search failed.'); const items=Array.isArray(data.items)?data.items:[]; if(!items.length){renderResults([]); setMessage('No songs found for that search.',true); return} renderResults(items); setMessage(`Found ${items.length} result${items.length===1?'':'s'}.`)}catch(error){renderResults([]); setMessage(`Search failed: ${error.message}`,true)} finally{elements.searchBtn.disabled=false}}
+    async function refreshRecentRequests(){try{const res=await fetch(`/api/guest/${encodeURIComponent(guestSlug)}/requests-preview`,{credentials:'same-origin'}); if(!res.ok) return; const items=await res.json(); if(!items.length){elements.recentList.innerHTML='<div class="empty">No recent requests yet.</div>'; return} elements.recentList.innerHTML=items.map(item=>`<div class="recent-item"><div class="recent-title">${escapeHtml(item.song_name || item.raw_title || 'Unknown song')}</div><div class="recent-meta">${escapeHtml(item.artist_name || item.channel_title || 'Unknown artist')}<br>Requested: ${escapeHtml(formatDate(item.added_at))}</div></div>`).join('')}catch{}}
+    window.addToQueue=async function(videoId){const item=latestResults.find(r=>r.id.videoId===videoId); if(!item){setMessage('Could not add that song.',true); return} try{const parsed=extractSongInfo(item.snippet.title,item.snippet.channelTitle); const res=await fetch(`/api/guest/${encodeURIComponent(guestSlug)}/requests`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({video_id:videoId,raw_title:item.snippet.title,song_name:parsed.songName,artist_name:parsed.artistName,channel_title:item.snippet.channelTitle})}); if(!res.ok){const data=await res.json().catch(()=>null); throw new Error(data?.error || 'Could not save request.')} setMessage('Your request has been added.'); refreshRecentRequests()}catch(error){setMessage(error.message||'Could not add request.',true)}}
+    elements.searchBtn.addEventListener('click',searchYouTube); elements.searchInput.addEventListener('keydown',e=>{if(e.key==='Enter') searchYouTube()});
+    updateApiStatus(); renderResults([]); refreshRecentRequests(); setInterval(refreshRecentRequests,10000);
+  </script>
+</body>
+</html>
